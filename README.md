@@ -2,16 +2,17 @@
 
 A collection of reusable AI security agent instructions and audit prompts for [VS Code Copilot Chat](https://code.visualstudio.com/docs/copilot/overview), [GitHub Copilot](https://github.com/features/copilot), and compatible AI coding assistants.
 
-These agents turn your AI assistant into a specialized security auditor that can perform comprehensive security assessments across four domains:
+These agents turn your AI assistant into specialized auditors that can perform comprehensive security assessments and system documentation:
 
-| Agent | Domain | Standards |
+| Agent | Domain | Standards / Output |
 |-------|--------|-----------|
 | **API Security** | Backend APIs & data access | OWASP API Top 10, CWE, NIST |
 | **Frontend Security** | Client-side web applications | OWASP Top 10, CSP, CWE |
 | **Infrastructure Security** | CI/CD, IaC, containers, supply chain | CIS Benchmarks, SLSA, NIST |
 | **Data Privacy** | GDPR, CCPA, consent, PII handling | GDPR, CCPA/CPRA, ISO 27701 |
+| **System Documentation** | Architecture, data model, APIs, requirements | C4 (Structurizr DSL), Mermaid, Markdown |
 
-Plus a **Full Security Audit** orchestrator that runs all four sequentially and produces an executive summary.
+Plus a **Full Security Audit** orchestrator that runs all four security audits sequentially and produces an executive summary.
 
 ## Quick Start
 
@@ -39,8 +40,9 @@ In VS Code with GitHub Copilot, open the Copilot Chat window and type:
 | `/security-infrastructure-audit` | Infrastructure & DevOps audit |
 | `/security-data-privacy-audit` | GDPR/CCPA privacy audit |
 | `/security-full-audit` | All four audits + executive summary |
+| `/system-documentation` | Full system specification from codebase |
 
-The agent will auto-detect your tech stack and begin auditing.
+The agent will auto-detect your tech stack and begin.
 
 > **Alternative:** You can also run audits via the Command Palette (`Ctrl+Shift+P` / `Cmd+Shift+P`) → type **"Run Prompt"** → select the desired audit.
 
@@ -68,6 +70,7 @@ Files in `.github/instructions/` are **automatically loaded** by GitHub Copilot 
 | `security-frontend.instructions.md` | `**/*.{ts,tsx,js,jsx,vue,svelte,css,html}` | Guides AI to flag XSS, auth, and client-side issues |
 | `security-infrastructure.instructions.md` | `**/*.{yml,yaml,json,bicep,tf,...}` | Guides AI to flag IaC and pipeline issues |
 | `security-data-privacy.instructions.md` | `**` | Guides AI to flag privacy/GDPR issues everywhere |
+| `system-documentation.instructions.md` | `**` | Guides AI to produce system specs from code |
 
 ### Prompts (On-Demand Audits)
 
@@ -152,13 +155,51 @@ Generate a report at `security-reports/api-audit-{date}.md`
 │   ├── security-api.instructions.md           # API/backend security rules
 │   ├── security-data-privacy.instructions.md  # GDPR/CCPA privacy rules
 │   ├── security-frontend.instructions.md      # Frontend/client security rules
-│   └── security-infrastructure.instructions.md # DevOps/infra security rules
+│   ├── security-infrastructure.instructions.md # DevOps/infra security rules
+│   └── system-documentation.instructions.md   # System documentation templates
 └── prompts/                                   # On-demand audit workflows
     ├── security-api-audit.prompt.md           # Full API security audit
     ├── security-data-privacy-audit.prompt.md  # Full privacy/GDPR audit
     ├── security-frontend-audit.prompt.md      # Full frontend security audit
     ├── security-infrastructure-audit.prompt.md # Full infrastructure audit
-    └── security-full-audit.prompt.md          # Orchestrator: runs all 4 + summary
+    ├── security-full-audit.prompt.md          # Orchestrator: runs all 4 + summary
+    └── system-documentation.prompt.md         # Full system specification generator    └── system-documentation.prompt.md         # Full system specification generator```
+
+## System Documentation Agent
+
+The **System Documentation** agent reverse-engineers your codebase into a comprehensive, implementation-ready specification. It produces:
+
+- **20 structured Markdown files** covering architecture, data model, API contracts, functional requirements, user stories, business rules, and more
+- **C4 architecture diagrams** in Structurizr DSL (System Context, Container, Component views)
+- **Mermaid diagrams** for ER diagrams, sequence flows, state machines, data flow, and deployment topology
+
+### Key Features
+
+- **Multi-repository support**: Automatically discovers and documents all repositories in the workspace (monorepo, multi-repo, git submodules)
+- **Diagram validation**: Ensures all Structurizr DSL and Mermaid syntax is valid before output
+- **Exhaustive coverage**: Documents every API endpoint, database table, entity, and business rule found in code
+- **Template completeness**: All 20+ specification files are always generated — nothing is skipped
+
+### Running
+
+```
+/system-documentation
+```
+
+### Output
+
+Reports are generated in `docs/spec/`:
+```
+docs/spec/
+├── README.md
+├── 00-executive-summary.md  through  19-glossary.md
+└── diagrams/
+    ├── workspace.dsl              # C4 architecture (Structurizr DSL)
+    ├── er-diagram.mermaid         # Entity-relationship diagram
+    ├── deployment.mermaid         # Infrastructure topology
+    ├── data-flow.mermaid          # Data movement diagram
+    ├── state-*.mermaid            # State machines per entity
+    └── sequence-*.mermaid         # Sequence diagrams per flow
 ```
 
 ## Severity Levels
