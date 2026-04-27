@@ -1,0 +1,114 @@
+name: PR Security Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+permissions: {}
+
+jobs:
+  security-review:
+    if: false # Disabled — enable when ready to use
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Get changed files
+        id: changed-files
+        run: |
+          # Determine which audit domains are relevant based on changed files
+          CHANGED=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
+
+          HAS_BACKEND=false
+          HAS_FRONTEND=false
+          HAS_INFRA=false
+
+          while IFS= read -r file; do
+            case "$file" in
+              *.cs|*.java|*.py|*.go|*.rb)
+                HAS_BACKEND=true ;;
+              *.ts|*.tsx|*.js|*.jsx|*.vue|*.svelte|*.html|*.css)
+                HAS_FRONTEND=true ;;
+              *.yml|*.yaml|*.json|*.bicep|*.tf|*.hcl|Dockerfile*|docker-compose*|.env*)
+                HAS_INFRA=true ;;
+            esac
+          done <<< "$CHANGED"
+
+          echo "has_backend=$HAS_BACKEND" >> "$GITHUB_OUTPUT"
+          echo "has_frontend=$HAS_FRONTEND" >> "$GITHUB_OUTPUT"
+          echo "has_infra=$HAS_INFRA" >> "$GITHUB_OUTPUT"
+
+          echo "Changed file types detected:"
+          echo "  Backend: $HAS_BACKEND"
+          echo "  Frontend: $HAS_FRONTEND"
+          echo "  Infrastructure: $HAS_INFRA"
+
+      - name: Run targeted security review
+        uses: anthropics/claude-code-action@beta
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          trigger_phrase: "/security-review"
+          prompt: |
+            You are a security reviewer. Analyze the changes in this pull request for security issues.
+
+            Focus your review on the changed files, applying these domain-specific checks:
+
+            ${{ steps.changed-files.outputs.has_backend == 'true' && '
+            ## Backend/API Security (changed files detected)
+            - Authorization on new/modified endpoints
+            - Injection vulnerabilities in new data access code
+            - Insecure deserialization patterns
+            - Secret exposure in new code
+            - Input validation on new/modified request models
+            - JWT/auth security changes
+            - Rate limiting on new endpoints
+            - SSRF in new HTTP client code
+            - Race conditions in new state-changing operations
+            ' || '' }}
+
+            ${{ steps.changed-files.outputs.has_frontend == 'true' && '
+            ## Frontend Security (changed files detected)
+            - XSS vulnerabilities (dangerouslySetInnerHTML, v-html, innerHTML, eval)
+            - Authentication token handling changes
+            - Secret exposure in client code
+            - New dependency security (check for known vulnerabilities)
+            - Input validation on new forms
+            - CSP impact of changes
+            - Prototype pollution risk in new deep merge/extend usage
+            - postMessage handler security
+            ' || '' }}
+
+            ${{ steps.changed-files.outputs.has_infra == 'true' && '
+            ## Infrastructure Security (changed files detected)
+            - CI/CD workflow changes: SHA-pinned actions, permissions, script injection
+            - IaC changes: hardcoded secrets, public access, firewall rules
+            - Container changes: base image pinning, non-root user, secrets in layers
+            - Secret exposure in config files
+            - Dependency changes: new vulnerable dependencies
+            ' || '' }}
+
+            ## Review Rules
+            - Do NOT fabricate CVE numbers. Use CWE identifiers.
+            - Only flag findings with concrete evidence in the diff.
+            - Apply framework-specific false positive suppression.
+            - For each finding, provide: severity, CWE, file:line, description, remediation.
+            - Rate findings: CRITICAL, HIGH, MEDIUM, LOW, INFORMATIONAL.
+
+            ## Privacy Quick Check
+            For all changed files, also check:
+            - New PII collection or storage without consent mechanism
+            - PII leaking into logs
+            - New third-party data sharing without DPA mention
+            - Missing data deletion cascade for new entities
+
+            Format your review as a clear, actionable PR comment. Group findings by severity.
+            If no security issues are found, confirm the changes look secure and note what was checked.
+          timeout_minutes: 25

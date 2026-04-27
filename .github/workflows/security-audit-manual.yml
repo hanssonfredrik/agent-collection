@@ -1,0 +1,200 @@
+name: Manual Security Audit
+
+on:
+  workflow_dispatch:
+    inputs:
+      audit_type:
+        description: 'Audit type'
+        required: true
+        type: choice
+        options:
+          - security-full-audit
+          - security-api-audit
+          - security-frontend-audit
+          - security-infrastructure-audit
+          - security-data-privacy-audit
+          - system-documentation
+      scope:
+        description: 'Scope (optional path or description, e.g. "src/api/" or "only authentication modules")'
+        required: false
+        type: string
+      create_pr:
+        description: 'Create a PR with the results'
+        required: true
+        default: true
+        type: boolean
+      create_issues:
+        description: 'Create GitHub issues for critical/high findings'
+        required: true
+        default: false
+        type: boolean
+
+permissions: {}
+
+jobs:
+  run-audit:
+    if: false # Disabled — enable when ready to use
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+      issues: write
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Set date
+        id: date
+        run: echo "date=$(date -u +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Prepare output directory
+        run: |
+          if [[ "${{ inputs.audit_type }}" == "system-documentation" ]]; then
+            mkdir -p docs/spec/diagrams
+          else
+            mkdir -p docs/security
+          fi
+
+      - name: Determine audit prompt
+        id: prompt
+        run: |
+          AUDIT_TYPE="${{ inputs.audit_type }}"
+          SCOPE="${{ inputs.scope }}"
+          DATE="${{ steps.date.outputs.date }}"
+
+          case "$AUDIT_TYPE" in
+            security-full-audit)
+              PROMPT="Run a full security audit of this repository. Execute all four domain audits (frontend, API, infrastructure, data privacy), perform STRIDE and LINDDUN threat modeling, and generate an executive summary. ${SCOPE:+Focus on: $SCOPE.} Generate all reports in docs/security/ with date $DATE."
+              ;;
+            security-api-audit)
+              PROMPT="Run a comprehensive API/backend security audit following OWASP API Top 10 (2023). ${SCOPE:+Scope: $SCOPE.} Generate the report at docs/security/api-security-audit-$DATE.md."
+              ;;
+            security-frontend-audit)
+              PROMPT="Run a comprehensive frontend security audit following OWASP Top 10. ${SCOPE:+Scope: $SCOPE.} Generate the report at docs/security/frontend-security-audit-$DATE.md."
+              ;;
+            security-infrastructure-audit)
+              PROMPT="Run a comprehensive infrastructure security audit covering CI/CD, IaC, containers, and supply chain. ${SCOPE:+Scope: $SCOPE.} Generate the report at docs/security/infrastructure-security-audit-$DATE.md."
+              ;;
+            security-data-privacy-audit)
+              PROMPT="Run a comprehensive data privacy audit covering GDPR, CCPA/CPRA, EU AI Act, and NIS2. ${SCOPE:+Scope: $SCOPE.} Generate the report at docs/security/data-privacy-audit-$DATE.md."
+              ;;
+            system-documentation)
+              PROMPT="Reverse-engineer this codebase into a comprehensive system specification. ${SCOPE:+Focus on: $SCOPE.} Generate all documentation files in docs/spec/ following the full template structure (24 markdown files + diagrams)."
+              ;;
+          esac
+
+          # Write prompt to file to handle multi-line content
+          echo "$PROMPT" > /tmp/audit-prompt.txt
+          echo "prompt_file=/tmp/audit-prompt.txt" >> "$GITHUB_OUTPUT"
+
+      - name: Run audit with Claude Code
+        uses: anthropics/claude-code-action@beta
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: |
+            $(cat ${{ steps.prompt.outputs.prompt_file }})
+
+            Follow the complete methodology defined in the .claude/commands/${{ inputs.audit_type }}.md file.
+            Be thorough. Apply all audit steps. Use the three-phase analysis methodology for security audits.
+          timeout_minutes: 55
+
+      - name: Check for generated files
+        id: check-output
+        run: |
+          if [[ "${{ inputs.audit_type }}" == "system-documentation" ]]; then
+            OUTPUT_DIR="docs/spec"
+          else
+            OUTPUT_DIR="docs/security"
+          fi
+
+          if [ -n "$(find "$OUTPUT_DIR" -name '*.md' -newer .git/HEAD 2>/dev/null)" ]; then
+            echo "has_output=true" >> "$GITHUB_OUTPUT"
+            echo "output_dir=$OUTPUT_DIR" >> "$GITHUB_OUTPUT"
+            echo "Generated files:"
+            find "$OUTPUT_DIR" -name '*.md' -newer .git/HEAD -ls
+          else
+            echo "has_output=false" >> "$GITHUB_OUTPUT"
+            echo "No output files generated"
+          fi
+
+      - name: Create branch and PR
+        if: steps.check-output.outputs.has_output == 'true' && inputs.create_pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          AUDIT_TYPE="${{ inputs.audit_type }}"
+          DATE="${{ steps.date.outputs.date }}"
+          BRANCH="${AUDIT_TYPE}/${DATE}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add "${{ steps.check-output.outputs.output_dir }}/"
+          git commit -m "${AUDIT_TYPE} report - ${DATE}"
+          git push -u origin "$BRANCH"
+
+          if [[ "$AUDIT_TYPE" == "system-documentation" ]]; then
+            LABELS="documentation"
+            TITLE="System Documentation: ${DATE}"
+          else
+            LABELS="security,audit"
+            TITLE="Security Audit (${AUDIT_TYPE#security-}): ${DATE}"
+          fi
+
+          gh pr create \
+            --title "$TITLE" \
+            --body "$(cat <<EOF
+          ## $TITLE
+
+          **Triggered by**: @${{ github.actor }}
+          **Scope**: ${{ inputs.scope || 'Full repository' }}
+          **Date**: ${DATE}
+
+          ### Generated Files
+          $(find "${{ steps.check-output.outputs.output_dir }}" -name '*.md' -newer .git/HEAD | sort | sed 's|^|- |')
+
+          ---
+          *Generated by the manual audit workflow using Claude Code*
+          EOF
+          )" \
+            --label "$LABELS"
+
+      - name: Create issues for critical/high findings
+        if: steps.check-output.outputs.has_output == 'true' && inputs.create_issues && inputs.audit_type != 'system-documentation'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "Scanning reports for critical and high findings..."
+          for report in docs/security/*-${{ steps.date.outputs.date }}.md; do
+            if [ -f "$report" ]; then
+              # Extract CRITICAL findings
+              grep -B1 "Severity.*CRITICAL" "$report" | grep "####" | while read -r line; do
+                FINDING=$(echo "$line" | sed 's/^#### //' | sed 's/\[//' | sed 's/\]//')
+                gh issue create \
+                  --title "[CRITICAL] ${FINDING}" \
+                  --body "Found in: ${report}\nAudit date: ${{ steps.date.outputs.date }}\n\nSee the full report for details." \
+                  --label "security,critical,audit-finding" || true
+              done
+
+              # Extract HIGH findings
+              grep -B1 "Severity.*HIGH" "$report" | grep "####" | while read -r line; do
+                FINDING=$(echo "$line" | sed 's/^#### //' | sed 's/\[//' | sed 's/\]//')
+                gh issue create \
+                  --title "[HIGH] ${FINDING}" \
+                  --body "Found in: ${report}\nAudit date: ${{ steps.date.outputs.date }}\n\nSee the full report for details." \
+                  --label "security,high,audit-finding" || true
+              done
+            fi
+          done
+
+      - name: Upload artifacts
+        if: steps.check-output.outputs.has_output == 'true'
+        uses: actions/upload-artifact@b4b15b8c7c6ac21ea08fcf65892d2ee8f75cf882 # v4.4.3
+        with:
+          name: ${{ inputs.audit_type }}-${{ steps.date.outputs.date }}
+          path: ${{ steps.check-output.outputs.output_dir }}/
+          retention-days: 90
